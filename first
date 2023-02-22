@@ -1,0 +1,323 @@
+
+tic                                             
+clc
+clear
+close all
+%------------------------------初始化----------------------------------------------%
+
+lujing='D:\Files\LZD\期刊文章\算例\shandonggrid\Temp';
+%% 选故障支路
+branches=readcell('支路故障信息_全部计算.xlsx'); %共5列，i节点，j节点，编号，支路名，故障位置
+lines_information = cell2mat(branches(:,[1:3,5]));
+lines_name = string(branches(:,4));
+select_line1 = 'AC127'; line1_id = find(lines_name == select_line1);
+select_line2 = 'AC131'; line2_id = find(lines_name == select_line2);
+select_line3 = 'AC138';line3_id = find(lines_name == select_line3);
+select_line4 = 'AC63';line4_id = find(lines_name == select_line4);
+select_line5 = 'AC15';line5_id = find(lines_name == select_line5);
+
+choosen_lines = [lines_information(line1_id,:);lines_information(line2_id,:);lines_information(line3_id,:);lines_information(line4_id,:);lines_information(line5_id,:)];
+clear line1_id line2_id line3_id line4_id select_line1 select_line2 select_line3 select_line4 select_line5
+choosen_lines(2,:) = [];
+%%
+loadPQ=xlsread('负荷功率PQ.xlsx');       %取出负荷原始功率数据--算例不同时需更换
+GenPQ=xlsread('发电机功率PQ.xlsx');   %取出发电机原始功率数据--算例不同时需更换  
+% 第27、29、30为风机
+
+% 文件注释：
+% L2：线路信息（r,x,B/2.以及故障文件S11设置时）
+% L3：变压器信息（r,x,k,以及故障文件S11设置时）
+% L4：直流信息（暂未用过）
+% L5：发电机信息
+% L6：负荷信息
+% LP1：各节点电压幅值(pu)和相角
+
+path0= [lujing '\ST.S11'];  % 故障文件
+path1=[lujing '\FN1.DAT'];  % 暂稳结果文件
+path2=[lujing '\FN2.DAT']; 
+path3=[lujing '\FN3.DAT']; 
+path4=[lujing '\FN4.DAT']; 
+path5=[lujing '\FN5.DAT']; 
+path6=[lujing '\FN6.DAT']; 
+path7=[lujing '\FN7.DAT']; 
+path8=[lujing '\FN8.DAT']; 
+path9=[lujing '\FN9.DAT']; 
+path10=[lujing '\FN10.DAT']; 
+path11=[lujing '\FN11.DAT']; 
+path12=[lujing '\FN12.DAT']; 
+path13=[lujing '\FN13.DAT']; 
+path14=[lujing '\FN14.DAT']; 
+path15=[lujing '\FN15.DAT']; 
+path16=[lujing '\FN16.DAT']; 
+path17=[lujing '\FN17.DAT']; 
+path18=[lujing '\FN18.DAT']; 
+pathERR=[lujing '\STERR.LIS']; % 暂稳报告
+
+path_Gen=[lujing '\LF.L5'];   % 发电机数据
+path_load=[lujing '\LF.L6'];   % 负荷数据
+%S11文件注释：           
+% 例“  1,   149,    71,     6,     0,     0, 1, 1, 1, 1, 1, 0,              1,            1.1,              0,              0,”
+%           1：有效标识，有效1，无效0
+%           2，3，4：故障线路两端母线以及故障线路对应的编号（与母线编号不一致，例中具体格式见文件L2）
+%           5：故障点在线路中的位置，0-100
+%           6：当5处为0是，该值为0，否则为168
+%           倒数两位：故障起始和中止时刻
+
+
+if exist(path1,'file')==2    %删除FN1.dat文件
+    delete(path1);delete(path2);delete(path3);delete(path4);delete(path5);delete(path6);delete(path7);delete(path8);delete(path9);
+    delete(path10);delete(path11);delete(path12);delete(path13);delete(path14);delete(path15);delete(path16);delete(path17);delete(path18);
+end
+
+Scenario=10000;
+%%
+PLine=zeros(Scenario,246);
+QLine=zeros(Scenario,246);
+PG=zeros(Scenario,32);
+QG=zeros(Scenario,32);
+PLoad=zeros(Scenario,64);
+QLoad=zeros(Scenario,64);
+V=zeros(Scenario,90);
+P_0=sum(loadPQ(:,1));
+%%
+
+label=zeros(Scenario*size(choosen_lines,1),6);    
+%前5列表示每个换流站是否电压失稳，最后一列表示发电机转速是否失稳(失稳0，稳定1)
+chaoliu=1;
+num=1;
+%%
+for n=1:Scenario           % 10000种潮流，每种潮流发生6种故障
+    bodong1=1+(rand(64,1)*0.5-0.25);
+    bodong2=1+(rand(64,1)*0.5-0.25);
+    bodong3=1+(rand(39,1)*0.5-0.25);
+    Ptemp=bodong1.*loadPQ(:,1);
+    Qtemp=bodong2.*loadPQ(:,2);
+    GenQ=bodong3.*GenPQ(:,2);
+    %--------风机波动性更大-----%
+    GenP=GenPQ(:,1);
+    GenP([27,29,30],1) = GenP([27,29,30],1) .* (0.8*rand(3,1)+0.2);
+    %-------储存负荷--------%
+    PLoad(chaoliu,:)=Ptemp;
+    QLoad(chaoliu,:)=Qtemp;
+    %----------------------%
+    k=sum(Ptemp)/P_0;
+    GenP_changed = PG_gen(GenP,k);
+    flag1=xiugai_LS(path_load,1:64,5*ones(1,64),Ptemp);                  % 修改负荷有功                
+    flag2=xiugai_LS(path_load,1:64,6*ones(1,64),Qtemp);                  % 修改负荷无功   
+    flag3_1=xiugai_LS(path_Gen,1:39,4*ones(1,39),GenP_changed);          % 修改发电机有功 
+    flag3_2=xiugai_LS(path_Gen,1:39,5*ones(1,39),GenQ);                  % 修改发电机有功
+
+    winopen([lujing '\WMLFRTMsg.exe']);                              %潮流计算       
+    pause(0.2)
+    
+    V_guiji_5converters_4timescalculate = zeros(601,5,4);
+    for i=1:size(choosen_lines,1)        
+        line_short = choosen_lines(i,:);    % 选择发生短路的线路
+        rest_line = choosen_lines;
+        rest_line(i,:) = [];
+%         N_k_list_num = nchoosek(1:size(rest_line,1),2);
+%         for j=1:size(rest_line,1)            
+%--------------------------------------------------------------------------------------------
+                %-------更改故障（N-2故障）-------%
+                cut_line1=rest_line(1,:);  
+                cut_line2=rest_line(2,:); 
+                cut_line3=rest_line(3,:); 
+%                 cut_line4=rest_line(4,:); 
+                %% 故障线路（N-3）
+                if cut_line1(4) == 50  % 线路50%处故障，第六位为切除点新增母线号，从168开始
+                    flag5_1=xiugai_LS(path0,1*ones(1,5),[5 6 2 3 4],[50 168 cut_line1(1,1:3) ]); 
+                else                             % 变压器0or100%处故障，第六位为0
+                    flag5_1=xiugai_LS(path0,1*ones(1,5),[5 6 2 3 4],[cut_line1(1,4) 0 cut_line1(1,1:3) ]);
+                end
+                
+                if cut_line2(4) == 50  % 线路50%处故障，第六位为新增母线号169
+                    flag5_2=xiugai_LS(path0,2*ones(1,5),[5 6 2 3 4],[50 169 cut_line2(1,1:3) ]); 
+                else                             % 变压器0or100%处故障，第六位为0
+                    flag5_2=xiugai_LS(path0,2*ones(1,5),[5 6 2 3 4],[cut_line2(1,4) 0 cut_line2(1,1:3) ]);
+                end               
+                
+                if cut_line3(4) == 50  % 线路50%处故障，第六位为新增母线号170
+                    flag5_3=xiugai_LS(path0,3*ones(1,5),[5 6 2 3 4],[50 170 cut_line3(1,1:3) ]); 
+                else                             % 变压器0or100%处故障，第六位为0
+                    flag5_3=xiugai_LS(path0,3*ones(1,5),[5 6 2 3 4],[cut_line2(1,4) 0 cut_line3(1,1:3) ]);
+                end                    
+ 
+%                 if cut_line4(4) == 50  % 线路50%处故障，第六位为新增母线号170
+%                     flag5_4=xiugai_LS(path0,4*ones(1,5),[5 6 2 3 4],[50 171 cut_line4(1,1:3) ]); 
+%                 else                             % 变压器0or100%处故障，第六位为0
+%                     flag5_4=xiugai_LS(path0,4*ones(1,5),[5 6 2 3 4],[cut_line2(1,4) 0 cut_line4(1,1:3) ]);
+%                 end 
+                
+                %% 发生短路后被切除的线路
+                if line_short(4) == 50  % 线路50%处故障，第六位为新增母线号170
+                    flag5_5=xiugai_LS(path0,4*ones(1,5),[5 6 2 3 4],[50 172 line_short(1,1:3) ]); 
+                    flag5_6=xiugai_LS(path0,5*ones(1,5),[5 6 2 3 4],[50 172 line_short(1,1:3) ]); 
+                else                             % 变压器0or100%处故障，第六位为0
+                    flag5_5=xiugai_LS(path0,4*ones(1,5),[5 6 2 3 4],[line_short(1,4) 0 line_short(1,1:3) ]);
+                    flag5_6=xiugai_LS(path0,5*ones(1,5),[5 6 2 3 4],[line_short(1,4) 0 line_short(1,1:3) ]); 
+                end
+                %%
+
+                %-----------暂稳计算--------------%
+                winopen([lujing '\wmudrt.exe']); % 
+                pause(0.2)
+                %---------------------检测暂稳Wmud.exe是否运行结束---------------------%
+                %-----(即：检测STERR.LIS文件最后一行是否有‘caculation finished’------%
+                      while 1
+                          if exist(pathERR,'file')==2 
+                              fileID = fopen(pathERR);
+                              if fileID==-1
+                                  continue
+                              else
+                                  while ~feof(fileID)        %%读取lis文件最后一行
+                                  tline = fgetl(fileID);
+                                  end   
+                                  
+                                  if contains(tline,'finished')
+                                      status=system('taskkill/F /IM wmudrt.exe /T');
+                                      fclose(fileID);
+                                      break
+                                  end
+                                  pause(0.1)
+                              end
+                          end
+                      end
+               %---------------------读取数据------------------------------%
+               %%
+               FN1 = load(path1);  FN2 = load(path2);  FN3 = load(path3);  FN4 = load(path4);  FN5 = load(path5);
+               FN6 = load(path6);  FN7 = load(path7);  FN8 = load(path8);  FN9 = load(path9);  FN10 = load(path10);
+               FN11 = load(path11);FN12 = load(path12);FN13 = load(path13);FN14 = load(path14);FN15 = load(path15);
+               FN16 = load(path16);FN17 = load(path17);FN18 = load(path18);
+
+               FN_all=cat(2,FN1,FN2,FN3,FN4,FN5,FN6,FN7,FN8,FN9,FN10,FN11,FN12,FN13,FN14,FN15,FN16,FN17,FN18);
+              %----------------label----------------%
+                    V_guiji_temp = FN_all(:,[52,53,64,104,105]);       % 将换流站节点电压数据取出 size = [601,5]
+                        %----储存---%
+                        V_guiji_5converters_4timescalculate(:,:,i) = V_guiji_temp;
+                        %-----------%  
+                    V_guiji_temp=V_guiji_temp'; % size = [5, 601]
+                    w_temp = FN_all(:,125:3:218);                      % 所有发电机角速度（pu）
+                    label_temp1=Stable_or_not(V_guiji_temp(1,:));
+                    label_temp2=Stable_or_not(V_guiji_temp(2,:));
+                    label_temp3=Stable_or_not(V_guiji_temp(3,:));
+                    label_temp4=Stable_or_not(V_guiji_temp(4,:));
+                    label_temp5=Stable_or_not(V_guiji_temp(5,:));
+                    label_w_temp = Omega_stable_or_not(w_temp);
+                    if contains(label_temp1,'Stable')
+                        label1=1;
+                    else
+                        label1=0;
+                    end
+                    if contains(label_temp2,'Stable')
+                        label2=1;
+                    else
+                        label2=0;
+                    end
+                    if contains(label_temp3,'Stable')
+                        label3=1;
+                    else
+                        label3=0;
+                    end
+                    if contains(label_temp4,'Stable')
+                        label4=1;
+                    else
+                        label4=0;
+                    end
+                    if contains(label_temp5,'Stable')
+                        label5=1;
+                    else
+                        label5=0;
+                    end
+                    if contains(label_w_temp,'Stable')
+                        label_w=1;
+                    else
+                        label_w=0;
+                    end
+                    label(num,:)=[label1,label2,label3,label4,label5,label_w];
+                    %%
+              %----------------------------------------%潮流数据存储%--------------------------------------%%%%
+                    if PLine(chaoliu,1)==0     
+                         PLine(chaoliu,:)=FN_all(3,219:2:709); 
+                         QLine(chaoliu,:)=FN_all(3,220:2:710);
+                         %%%存P
+                         PG(chaoliu,:)=FN_all(3,123:3:218);
+                         %%%存Q
+                         QG(chaoliu,:)=FN_all(3,124:3:217);
+                         %%%存V
+                         V(chaoliu,:)=FN_all(3,33:122);
+                    end
+              %----------暂稳计算计数---------%
+                    num=num+1;
+              %----------------------------------------------------------------------------------------------%%%
+    end
+    filename = 'D:\Files\LZD\期刊文章\算例\codes\data\V_data';
+    filename = [filename, '\', num2str(n), '.mat'];
+    save(filename, 'V_guiji_5converters_4timescalculate');
+    
+    
+    if mod(chaoliu,1000)==0
+        save('风电_潮流+label_10000.mat','V','PG','QG','PLine','QLine','PLoad','QLoad','label');
+    end
+    chaoliu=chaoliu+1;
+end
+toc
+save('data_10000.mat','V','PG','QG','PLine','QLine','PLoad','QLoad','label');
+
+function flag=xiugai_LS(path,hang,lie,xiugaishu)
+%此函数可以修改类似L5，L6，S12的文件
+%path是修改文件的路径和名字
+%xiugaishu是修改的具体数字
+%hang,lie是被修改数字的行和列
+%hang，lie，xiugaishu可以是向量
+%%
+fid=fopen(path); 
+count=1;
+while ~feof(fid)              %若未读到文件末尾则继续循环
+    A{count,1}=fgetl(fid);    %把文件的每一行放到A的每一行,便于修改
+    count=count+1;
+end
+fclose(fid);
+%%
+for i=1:length(hang)    
+    temp1=A{hang(i)};         %temp1为所要修改行的数据
+    idx1=strfind(temp1,',');  %找到修改行数据的每个逗号位置
+    try                       %为了正确找到此行的第一个数
+    strstart=idx1(lie(i)-1)+1;  
+    strend=idx1(lie(i))-1;
+    catch
+        strstart=1;           %第一个数的位置
+        strend=idx1(1)-1;
+    end
+ %%  
+    %找到此数的长度，小数位数
+    temp=temp1(strstart:strend);  %temp为所要修改的具体数字
+    idx2=strfind(temp,'.');       %找到修改数小数点的位置
+    xiaoshuwei=length(temp)-idx2; %小数位的位数
+    if isempty(xiaoshuwei)
+        xiaoshuwei=0;
+    end
+ %%
+    %修改A中数据，A是一个单元数组
+    jingdu=['%' num2str(length(temp)) '.' num2str(xiaoshuwei) 'f' ];%修改数的精度
+    temp=sprintf(jingdu,xiugaishu(i));      %把xiugaishu变换成此path文本内容的格式
+    temp1(strstart:strend)=temp;      %把修改好的数放入temp1
+    A{hang(i)}=temp1;                 %放入A中
+end
+%% 写入文件
+fid1=fopen(path,'w+');              %以读写的的形式打开str1的文件
+for i=1:length(A)                   %把A写入此文件
+    fprintf(fid1,A{i});
+    fprintf(fid1,'\r\n');
+   % 写入文件\n无法换行，解决方法，将‘\n’换成’\r\n’。
+%   \r ：将当前位置移到本行开头。又叫回车，对应键盘上的return键
+%   \n：将当前位置移到下一行开头。又叫换行，newline。
+%   这时候可能就有人陷入了思考中，在文本中回车不就相当于换行了吗？换行不就相当于
+%   到了下一行了吗？其实按道理说这样理解是没有问题的，但是在不同的操作系统中，换行是由不同的方式来表示的。
+%   Linux中\n表示回车并换行；
+%   Windows中\r\n表示回车并换行。
+%   Mac中\r表示回车并换行。   
+end
+%%
+fclose all;
+flag=1;
+end
